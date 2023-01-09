@@ -77,5 +77,8 @@ riscv/riscv/uma_machdep.c	standard
 riscv/riscv/unwind.c		optional	ddb | kdtrace_hooks | stack
 riscv/riscv/vm_machdep.c	standard
 
+# Starfive JH7110 SoC
+riscv/starfive/jh7110_clkgen.c	optional fdt soc_starfive_jh7110
+
 # Zstd
 contrib/zstd/lib/freebsd/zstd_kfreebsd.c		optional zstdio compile-with ${ZSTD_C}
