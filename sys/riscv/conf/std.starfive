@@ -1,0 +1,4 @@
+# $FreeBSD$
+
+# StarFive JH7110 SoC (VisionFive 2)
+options		SOC_STARFIVE_JH7110

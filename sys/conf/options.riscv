@@ -3,3 +3,6 @@
 RISCV				opt_global.h	# For cpu RISCV to work
 FPE				opt_global.h
 INTRNG				opt_global.h
+
+# SoC Support
+SOC_STARFIVE_JH7110		opt_soc.h

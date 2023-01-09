@@ -222,3 +222,6 @@ device		fu740_pci_dw
 device		sifive_gpio
 device		sifive_spi
 include		"../sifive/std.sifive"
+
+# StarFive device drivers
+include		"std.starfive"
