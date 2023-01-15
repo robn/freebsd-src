@@ -364,5 +364,6 @@ identify_cpu(void)
 		printf("CPU(%d): %s %s\n", cpu,
 		    cpu_desc[cpu].cpu_impl_name,
 		    cpu_desc[cpu].cpu_part_name);
+		printf("         impl_id=0x%08x part_id=0x%08x\n", impl_id, part_id);
 	}
 }
