@@ -936,6 +936,16 @@ clknode_get_freq(struct clknode *clknode, uint64_t *freq)
 
 	CLK_TOPO_ASSERT();
 
+	printf(">>> IN clknode_get_freq; clknode=%p, freq=%p\n", clknode, freq);
+	if (clknode) {
+		printf("    this clknode:\n");
+		printf("        name: %s\n", clknode->name);
+		printf("        id: %ld\n", clknode->id);
+		printf("        parent_cnt: %d\n", clknode->parent_cnt);
+		printf("        parent_idx: %d\n", clknode->parent_idx);
+		printf("        parent: %p\n", clknode->parent);
+	}
+
 	/* Use cached value, if it exists. */
 	*freq  = clknode->freq;
 	if (*freq != 0)
