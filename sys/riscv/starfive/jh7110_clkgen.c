@@ -522,6 +522,51 @@ jh7110_register_mux(struct jh7110_clkgen_softc *sc)
 }
 
 
+/* integer clock dividers */
+struct jh7110_div_def {
+	int		reg;
+	const char	*name;
+	const char	*parent;
+	uint32_t	width;
+};
+static struct jh7110_div_def jh7110_div[] = {
+	{ JH7110_CPU_CORE, "cpu_core", 3 },
+	{ -1 },
+};
+
+static void
+jh7110_register_div(struct jh7110_clkgen_softc *sc)
+{
+	struct jh7110_div_def *def;
+	struct clk_div_def clkdef;
+	int rc;
+
+	for (def = jh7110_div; def->reg >= 0; def++) {
+		bzero(&clkdef, sizeof(clkdef));
+		clkdef.clkdef.id = def->reg;
+		clkdef.clkdef.name = def->name;
+		clkdef.clkdef.parent_names = def->parent_names;
+		clkdef.clkdef.parent_cnt = def->parent_cnt;
+		clkdef.clkdef.flags = CLK_NODE_STATIC_STRINGS;
+		clkdef.offset = def->reg;
+		clkdef.shift = STARFIVE_CLK_DIV_SHIFT;
+		clkdef.i_width = def->width;
+
+		rc = clknode_div_register(sc->clkdom, &clkdef);
+		if (rc != 0)
+			panic(
+			    "jh7110_div_register: "
+			    "clknode_div_register failed: "
+			    "rc=%d; reg=0x%04x; name=%s",
+			    rc, def->reg, def->name);
+
+		if (bootverbose)
+			device_printf(sc->dev,
+			    "registered div: reg=0x%04x; name=%s\n",
+			    def->reg, def->name);
+	}
+}
+
 static struct ofw_compat_data compat_data[] = {
 	{ "starfive,jh7110-clkgen",	1 },
 	{ NULL,				0 },
@@ -593,6 +638,7 @@ jh7110_clkgen_attach(device_t dev)
 	jh7110_register_fixed_factor(sc);
 	jh7110_register_gate(sc);
 	jh7110_register_mux(sc);
+	jh7110_register_div(sc);
 
 #if 0
 static const struct jh7110_clk_data jh7110_clk_sys_data[] __initconst = {
