@@ -8,6 +8,7 @@ SRCS+=	\
 	ioapic.c	\
 	kernemu_dev.c	\
 	mptbl.c		\
+	loader_linux.c	\
 	pci_fbuf.c	\
 	pci_gvt-d.c	\
 	pci_lpc.c	\

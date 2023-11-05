@@ -40,6 +40,7 @@ struct e820_entry {
 uint64_t e820_alloc(const uint64_t address, const uint64_t length,
     const uint64_t alignment, const enum e820_memory_type type,
     const enum e820_allocation_strategy strategy);
+unsigned int e820_fill_table(struct e820_entry *table, unsigned int nelems);
 void e820_dump_table(void);
 int e820_init(struct vmctx *const ctx);
 int e820_finalize(void);
