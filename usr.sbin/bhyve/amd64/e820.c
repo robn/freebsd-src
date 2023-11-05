@@ -88,6 +88,28 @@ e820_get_type_name(const enum e820_memory_type type)
 	}
 }
 
+unsigned int
+e820_fill_table(struct e820_entry *table, unsigned int nelems)
+{
+	struct e820_element *element;
+	unsigned int i;
+
+	if (nelems == 0)
+		return (0);
+
+	i = 0;
+	TAILQ_FOREACH(element, &e820_table, chain) {
+		table[i].base = element->base;
+		table[i].length = element->end - element->base;
+		table[i].type = element->type;
+		i++;
+		if (--nelems == 0)
+			break;
+	}
+
+	return (i);
+}
+
 void
 e820_dump_table(void)
 {
