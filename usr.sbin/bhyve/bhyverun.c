@@ -74,6 +74,7 @@
 #include "acpi.h"
 #include "bhyverun.h"
 #include "bootrom.h"
+#include "loader.h"
 #include "config.h"
 #include "debug.h"
 #ifdef BHYVE_GDB
@@ -100,6 +101,8 @@ int guest_ncpus;
 uint16_t cpu_cores, cpu_sockets, cpu_threads;
 
 int raw_stdio = 0;
+
+static struct loader *loader = NULL;
 
 static char *progname;
 static const int BSP = 0;
@@ -572,7 +575,7 @@ do_open(const char *vmname)
 	error = vm_create(vmname);
 	if (error) {
 		if (errno == EEXIST) {
-			if (romboot) {
+			if (romboot || loader) {
 				reinit = true;
 			} else {
 				/*
@@ -585,7 +588,7 @@ do_open(const char *vmname)
 			exit(4);
 		}
 	} else {
-		if (!romboot) {
+		if (!romboot && !loader) {
 			/*
 			 * If the virtual machine was just created then a
 			 * bootrom must be configured to boot it.
@@ -876,6 +879,11 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	error = loader_init(&loader);
+	if (error)
+		errx(EX_USAGE, "invalid loader '%s'",
+		    get_config_value("loader.name"));
+
 	calc_topology();
 	build_vcpumaps();
 
@@ -934,6 +942,13 @@ main(int argc, char *argv[])
 
 	init_mem(guest_ncpus);
 	init_bootrom(ctx);
+
+	if ((error = loader_setup_memory(loader, ctx)) != 0) {
+		fprintf(stderr, "loader failed to setup memory: %s\n",
+		    strerror(error));
+		exit(4);
+	}
+
 	if (bhyve_init_platform(ctx, bsp) != 0)
 		exit(4);
 
@@ -1014,6 +1029,12 @@ main(int argc, char *argv[])
 
 	if (bhyve_init_platform_late(ctx, bsp) != 0)
 		exit(4);
+
+	if ((error = loader_setup_boot_cpu(loader, ctx, bsp)) != 0) {
+		fprintf(stderr, "loader failed to setup boot cpu: %s\n",
+		    strerror(error));
+		exit(4);
+	}
 
 	/*
 	 * Change the proc title to include the VM name.
