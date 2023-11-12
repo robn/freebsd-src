@@ -9,6 +9,7 @@ SRCS+=	\
 	kernemu_dev.c	\
 	mptbl.c		\
 	loader_linux.c	\
+	loader_multiboot2.c \
 	pci_ahci.c	\
 	pci_e82545.c	\
 	pci_fbuf.c	\
