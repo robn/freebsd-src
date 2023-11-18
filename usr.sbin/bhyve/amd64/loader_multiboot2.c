@@ -42,6 +42,9 @@
 
 #include <vmmapi.h>
 
+#include <libelf.h>
+#include <libutil.h>
+
 #include "loader.h"
 #include "debug.h"
 
@@ -51,7 +54,7 @@
 
 /* Initial GDT/IDT location and size */
 #define	BOOT_GDT_OFFSET		(0x0500llu)
-#define	BOOT_GDT_NENTRIES	(4)
+#define	BOOT_GDT_NENTRIES	(3)
 #define	BOOT_IDT_OFFSET		(0x0520llu)
 #define	BOOT_IDT_NENTRIES	(1)
 
@@ -170,43 +173,12 @@ _mmap_read_file(const char *filename, char **addr, size_t *size)
 	return (0);
 }
 
-struct gdt_def {
-	uint32_t base;
-	uint32_t limit;
-	uint32_t flags;
-};
-static struct gdt_def gdt_def[] = {
-	{ 0, 0, 0 },		/* NULL */
-	{ 0, 0xfffff, 0xa09b },	/* CODE */
-	{ 0, 0xfffff, 0xc093 },	/* DATA */
-	{ 0, 0xfffff, 0x808b },	/* TSS */
-};
-
-#define	_GDT_ENTRY(def)					\
-	(((((def)->base)  & 0xff000000ull) << 32) |	\
-	 ((((def)->flags) & 0x0000f0ffull) << 40) |	\
-	 ((((def)->limit) & 0x000f0000ull) << 32) |	\
-	 ((((def)->base)  & 0x00ffffffull) << 16) |	\
-	 ((((def)->limit) & 0x0000ffffull)))
-
-/* helper; set the segment register and its shadow register in one call */
-static inline int
-_set_reg_desc(struct vcpu *vcpu, int reg, int idx)
-{
-	int err;
-	struct gdt_def *def = &gdt_def[idx];
-	if (!(err = vm_set_desc(vcpu, reg, def->base, def->limit, def->flags)))
-		err = vm_set_register(vcpu, reg, idx << 3);
-	return (err);
-}
-
 static int
 loader_multiboot2_setup_memory(struct vmctx *ctx)
 {
-	(void) ctx;
-
 	int err = 0;
 	char *ibase; size_t isize;
+	Elf *elf = NULL;
 
 	const char *image = get_config_value("loader.image");
 	if (!image) {
@@ -261,7 +233,7 @@ loader_multiboot2_setup_memory(struct vmctx *ctx)
 	if (hdr == NULL) {
 		EPRINTLN("loader_multiboot2: multiboot2 header not found");
 		err = EINVAL;
-		goto done;
+		goto fail;
 	}
 
 	uint32_t load_addr = UINT32_MAX;
@@ -308,7 +280,7 @@ loader_multiboot2_setup_memory(struct vmctx *ctx)
 				EPRINTLN("loader_multiboot2: image requires "
 				    "unsupported tag type %d", tag->type);
 				err = ENOTSUP;
-				goto done;
+				goto fail;
 			}
 			break;
 		}
@@ -322,13 +294,83 @@ loader_multiboot2_setup_memory(struct vmctx *ctx)
 		/* XXX probably just load it at top of RAM */
 		EPRINTLN("loader_multiboot2: unable to determine load address");
 		err = EINVAL;
-		goto done;
+		goto fail;
 	}
 
 	EPRINTLN("loader_multiboot2: load_addr %08x", load_addr);
 
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		EPRINTLN("loader_multiboot2: ELF library is too old");
+		err = ENOTSUP;
+		goto fail;
+	}
+
+	elf = elf_memory(ibase, isize);
+	if (elf == NULL) {
+		EPRINTLN("loader_multiboot2: ELF parse failed: %s",
+		    elf_errmsg(elf_errno()));
+		err = EINVAL;
+		goto fail;
+	}
+
+	if (elf_getident(elf, NULL)[EI_CLASS] != ELFCLASS32) {
+		EPRINTLN("loader_multiboot2: we only support "
+		    "32-bit ELF objects");
+		err = EINVAL;
+		goto fail;
+	}
+
+	Elf32_Ehdr *ehdr = elf32_getehdr(elf);
+	if (ehdr == NULL) {
+		EPRINTLN("loader_multiboot2: couldn't get ELF header: %s",
+		    elf_errmsg(elf_errno()));
+		err = EINVAL;
+		goto fail;
+	}
+	if (ehdr->e_machine != EM_386) {
+		EPRINTLN("loader_multiboot2: we only support i386 ELF objects");
+		err = EINVAL;
+		goto fail;
+	}
+
+	uint32_t entry_addr = ehdr->e_entry;
+	printf("loader_multiboot2: ELF entry addr %08x\n", entry_addr);
+
+	size_t ephnum;
+	Elf32_Phdr *ephdr = NULL;
+	if (elf_getphdrnum(elf, &ephnum) == 0)
+	    ephdr = elf32_getphdr(elf);
+	if (ephdr == NULL) {
+		EPRINTLN("loader_multiboot2: couldn't get "
+		    "ELF program headers: %s", elf_errmsg(elf_errno()));
+		err = EINVAL;
+		goto fail;
+	}
+
+	load_addr = UINT32_MAX; // XXX oh minmax in relocatable is just the range, this was always stupid
+	for (size_t i = 0; i < ephnum; i++) {
+		Elf32_Phdr *p = &ephdr[i];
+		if (p->p_type != PT_LOAD)
+			continue;
+
+		load_addr = MIN(load_addr, p->p_vaddr);
+		/*
+		 * XXX hedron at least loads above 2G and isn't relocateable,
+		 * so this really needs to be roms. which probably has
+		 * implications for the linux loader too -- robn, 2023-11-12
+		 */
+		char *haddr = vm_map_gpa(ctx, p->p_vaddr, p->p_memsz);
+		bzero(haddr, p->p_memsz);
+		memcpy(haddr, ibase + p->p_offset, p->p_filesz);
+
+		printf("loader_multiboot2_setup_boot_cpu: loaded %08x (%08x) to %08x (%08x)\n", p->p_offset, p->p_filesz, p->p_vaddr, p->p_memsz);
+	}
+
+
+	/*
 	char *hibase = vm_map_gpa(ctx, load_addr, isize);
 	memcpy(hibase, ibase, isize);
+	*/
 
 	/* XXX hacked up just for hedron */
 	struct multiboot2_bootinfo *bootinfo = (struct multiboot2_bootinfo *)
@@ -357,8 +399,42 @@ loader_multiboot2_setup_memory(struct vmctx *ctx)
 	bootinfo->size = sizeof (struct multiboot2_bootinfo) + tagpos;
 	bootinfo->reserved = 0;
 
-done:
+fail:
+	elf_end(elf);
 	munmap(ibase, isize);
+	return (err);
+}
+
+#define DESC_PRESENT            0x00000080
+#define DESC_LONGMODE           0x00002000
+#define DESC_DEF32              0x00004000
+#define DESC_GRAN               0x00008000
+#define DESC_UNUSABLE           0x00010000
+static struct seg_desc gdt_def[] = {
+	{ 0, 0, 0 },		/* NULL */
+	{ 0, 0xfffff, DESC_GRAN | DESC_DEF32 | DESC_PRESENT | SDT_MEMERA },
+	{ 0, 0xfffff, DESC_GRAN | DESC_DEF32 | DESC_PRESENT | SDT_MEMRWA },
+#if 0
+	{ 0, 0xfffff, 0xc09a },	/* CODE */
+	{ 0, 0xfffff, 0xc092 },	/* DATA */
+#endif
+};
+
+#define	_GDT_ENTRY(def)					\
+	(((((def)->base)  & 0xff000000ull) << 32) |	\
+	 ((((def)->access) & 0x0000f0ffull) << 40) |	\
+	 ((((def)->limit) & 0x000f0000ull) << 32) |	\
+	 ((((def)->base)  & 0x00ffffffull) << 16) |	\
+	 ((((def)->limit) & 0x0000ffffull)))
+
+/* helper; set the segment register and its shadow register in one call */
+static inline int
+_set_reg_desc(struct vcpu *vcpu, int reg, int idx)
+{
+	int err;
+	struct seg_desc *def = &gdt_def[idx];
+	if (!(err = vm_set_desc(vcpu, reg, def->base, def->limit, def->access)))
+		err = vm_set_register(vcpu, reg, idx << 3);
 	return (err);
 }
 
@@ -369,11 +445,17 @@ loader_multiboot2_setup_boot_cpu(struct vmctx *ctx, struct vcpu *vcpu)
 
 	int err = 0;
 
+
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_EFER, 0)))
+		goto fail;
+
 	/* Install the GDT */
 	uint64_t *gdt = vm_map_gpa(ctx, BOOT_GDT_OFFSET,
 	    sizeof (uint64_t) * BOOT_GDT_NENTRIES);
-	for (int i = 0; i < BOOT_GDT_NENTRIES; i++)
+	for (int i = 0; i < BOOT_GDT_NENTRIES; i++) {
 		gdt[i] = _GDT_ENTRY(&gdt_def[i]);
+		EPRINTLN("%d: %lx", i, gdt[i]);
+	}
 	if ((err = vm_set_desc(vcpu, VM_REG_GUEST_GDTR, BOOT_GDT_OFFSET,
 	    sizeof (uint64_t) * BOOT_GDT_NENTRIES -1, 0)))
 		goto fail;
@@ -384,6 +466,14 @@ loader_multiboot2_setup_boot_cpu(struct vmctx *ctx, struct vcpu *vcpu)
 	idt[0] = 0;
 	if ((err = vm_set_desc(vcpu, VM_REG_GUEST_IDTR, BOOT_IDT_OFFSET,
 	    sizeof (uint64_t) * BOOT_IDT_NENTRIES -1, 0)))
+		goto fail;
+
+	if ((err = vm_set_desc(vcpu, VM_REG_GUEST_TR, 0, 0, DESC_UNUSABLE)))
+		goto fail;
+
+	if ((err = vm_set_desc(vcpu, VM_REG_GUEST_LDTR, 0, 0, DESC_UNUSABLE)))
+		goto fail;
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_LDTR, 0)))
 		goto fail;
 
 	if ((err = _set_reg_desc(vcpu, VM_REG_GUEST_CS, 1)))
@@ -400,22 +490,28 @@ loader_multiboot2_setup_boot_cpu(struct vmctx *ctx, struct vcpu *vcpu)
 	if ((err = _set_reg_desc(vcpu, VM_REG_GUEST_SS, 2)))
 		goto fail;
 
-	if ((err = _set_reg_desc(vcpu, VM_REG_GUEST_TR, 3)))
-		goto fail;
-
 	if ((err = vm_set_register(vcpu, VM_REG_GUEST_CR0, CR0_PE)))
 		goto fail;
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_CR3, 0)))
+		goto fail;
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_CR4, 0)))
+		goto fail;
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_EFER, 0)))
+		goto fail;
+
 	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RFLAGS, 0x2)))
 		goto fail;
 
-	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RAX, 0x36d76289)))
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RAX, 0x36d76289))) // XXX magic
 		goto fail;
 
-	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RBX, 0x7000llu)))
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RBX, 0x7000llu)))  // XXX bootinfo
 		goto fail;
 
-	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RIP, 0x6600000llu)))
+	if ((err = vm_set_register(vcpu, VM_REG_GUEST_RIP, 0x06600868))) // XXX hardcoded entry
 		goto fail;
+
+	EPRINTLN("registers set");
 
 fail:
 	return (err);

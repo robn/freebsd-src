@@ -335,16 +335,22 @@ loader_linux_setup_memory(struct vmctx *ctx)
  * stuff in sys/amd64/include/segments.h but the conversion functions aren't
  * available to userspace, so its easier to do this ourselves.
  */
-struct gdt_def {
-	uint32_t base;
-	uint32_t limit;
-	uint32_t flags;
-};
-static struct gdt_def gdt_def[] = {
+#define DESC_PRESENT            0x00000080
+#define DESC_LONGMODE           0x00002000
+#define DESC_DEF32              0x00004000
+#define DESC_GRAN               0x00008000
+#define DESC_UNUSABLE           0x00010000
+
+static struct seg_desc gdt_def[] = {
 	{ 0, 0, 0 },		/* NULL */
+	{ 0, 0xfffff, DESC_GRAN | DESC_LONGMODE | DESC_PRESENT | SDT_MEMERA },
+	{ 0, 0xfffff, DESC_GRAN | DESC_DEF32    | DESC_PRESENT | SDT_MEMRWA },
+	{ 0, 0xfffff, DESC_GRAN |                 DESC_PRESENT | SDT_SYSBSY },
+#if 0
 	{ 0, 0xfffff, 0xa09b },	/* CODE */
 	{ 0, 0xfffff, 0xc093 },	/* DATA */
 	{ 0, 0xfffff, 0x808b },	/* TSS */
+#endif
 };
 
 /*
@@ -353,7 +359,7 @@ static struct gdt_def gdt_def[] = {
  */
 #define	_GDT_ENTRY(def)					\
 	(((((def)->base)  & 0xff000000ull) << 32) |	\
-	 ((((def)->flags) & 0x0000f0ffull) << 40) |	\
+	 ((((def)->access) & 0x0000f0ffull) << 40) |	\
 	 ((((def)->limit) & 0x000f0000ull) << 32) |	\
 	 ((((def)->base)  & 0x00ffffffull) << 16) |	\
 	 ((((def)->limit) & 0x0000ffffull)))
@@ -363,8 +369,8 @@ static inline int
 _set_reg_desc(struct vcpu *vcpu, int reg, int idx)
 {
 	int err;
-	struct gdt_def *def = &gdt_def[idx];
-	if (!(err = vm_set_desc(vcpu, reg, def->base, def->limit, def->flags)))
+	struct seg_desc *def = &gdt_def[idx];
+	if (!(err = vm_set_desc(vcpu, reg, def->base, def->limit, def->access)))
 		err = vm_set_register(vcpu, reg, idx << 3);
 	return (err);
 }

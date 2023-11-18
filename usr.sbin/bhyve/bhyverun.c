@@ -512,6 +512,11 @@ vm_loop(struct vmctx *ctx, struct vcpu *vcpu)
 	vmrun.cpusetsize = sizeof(dmask);
 
 	while (1) {
+		uint64_t b, r; uint32_t l, a;
+		vm_get_desc(vcpu, VM_REG_GUEST_CS, &b, &l, &a);
+		vm_get_register(vcpu, VM_REG_GUEST_CS, &r);
+		EPRINTLN("vmentry: cpu %d, cs %lx, desc %lx/%x/%x", vcpu_id(vcpu), r, b, l, a);
+
 		error = vm_run(vcpu, &vmrun);
 		if (error != 0)
 			break;
@@ -522,6 +527,10 @@ vm_loop(struct vmctx *ctx, struct vcpu *vcpu)
 			warnx("vm_loop: unexpected exitcode 0x%x", exitcode);
 			exit(4);
 		}
+
+		vm_get_desc(vcpu, VM_REG_GUEST_CS, &b, &l, &a);
+		vm_get_register(vcpu, VM_REG_GUEST_CS, &r);
+		EPRINTLN("vmexit: cpu %d, exit %d, cs %lx, desc %lx/%x/%x", vcpu_id(vcpu), exitcode, r, b, l, a);
 
 		rc = (*vmexit_handlers[exitcode])(ctx, vcpu, &vmrun);
 
